@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Open-Firecrawl</title>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; padding: 2rem; max-width: 800px; margin: 0 auto; }
+        input, textarea, button { width: 100%; box-sizing: border-box; padding: 1rem; margin-bottom: 1rem; background: #1e293b; color: #f8fafc; border: 1px solid #334155; border-radius: 8px; font-family: monospace; }
+        button { background: #3b82f6; cursor: pointer; font-weight: bold; border: none; }
+        button:hover { background: #2563eb; }
+        button:disabled { background: #475569; cursor: not-allowed; }
+        pre { background: #020617; padding: 1rem; border-radius: 8px; overflow-x: auto; font-family: monospace; }
+        #loader { display: none; color: #38bdf8; font-weight: bold; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <h1>🔥 open-firecrawl</h1>
+    <p>Deep-crawl a domain and extract structured JSON.</p>
+    
+    <form id="scrapeForm">
+        <label>Target URL:</label>
+        <input type="url" name="url" placeholder="https://smartpuja.com/" required>
+        
+        <label>JSON Extraction Schema:</label>
+        <textarea name="schema" rows="15" required>
+{
+  "type": "object",
+  "properties": {
+    "temple_name": {"type": "string"},
+    "poojas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "details": {"type": "string"},
+          "price": {"type": "string"}
+        }
+      }
+    }
+  }
+}
+        </textarea>
+        
+        <button type="submit">Start Deep Crawl</button>
+    </form>
+    
+    <div id="loader">Spidering internal links and extracting schemas (this may take up to 60 seconds)...</div>
+    
+    <h2>Database Output:</h2>
+    <pre id="result">{}</pre>
+
+    <script>
+        document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button');
+            const loader = document.getElementById('loader');
+            const resultBox = document.getElementById('result');
+            
+            btn.disabled = true;
+            loader.style.display = 'block';
+            resultBox.textContent = '{}';
+            
+            const formData = new FormData(e.target);
+            try {
+                const response = await fetch('/scrape', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                resultBox.textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                resultBox.textContent = "Error: " + err;
+            } finally {
+                btn.disabled = false;
+                loader.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>

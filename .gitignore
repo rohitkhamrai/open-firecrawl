@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+debug_html.txt
+debug_md.txt
+output.json
+*.zip
+firecrawl_data/
+ui_screenshot.jpg
+.venv/
+venv/
+env/
