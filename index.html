@@ -12,6 +12,7 @@
         button:disabled { background: #475569; cursor: not-allowed; }
         pre { background: #020617; padding: 1rem; border-radius: 8px; overflow-x: auto; font-family: monospace; }
         #loader { display: none; color: #38bdf8; font-weight: bold; margin-bottom: 1rem; }
+        .input-group { margin-bottom: 1rem; }
     </style>
 </head>
 <body>
@@ -19,31 +20,49 @@
     <p>Deep-crawl a domain and extract structured JSON.</p>
     
     <form id="scrapeForm">
-        <label>Target URL:</label>
-        <input type="url" name="url" placeholder="https://smartpuja.com/" required>
+        <div class="input-group">
+            <label for="url">Target URL</label>
+            <input type="url" id="url" name="url" placeholder="https://example.com" value="https://smartpuja.com/" required>
+        </div>
         
-        <label>JSON Extraction Schema:</label>
-        <textarea name="schema" rows="15" required>
+        <div class="input-group">
+            <label for="limit">Max Deep Pages (Limit)</label>
+            <input type="number" id="limit" name="limit" placeholder="5" value="5" min="1" max="20" required>
+        </div>
+
+        <div class="input-group">
+            <label for="schema">JSON Extraction Schema:</label>
+            <textarea id="schema" name="schema" rows="15" required>
 {
   "type": "object",
   "properties": {
-    "temple_name": {"type": "string"},
     "poojas": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "name": {"type": "string"},
-          "details": {"type": "string"},
-          "price": {"type": "string"}
+          "title": { "type": "string" },
+          "price_inr": { "type": "number" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "blogs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "content_summary": { "type": "string" }
         }
       }
     }
   }
 }
-        </textarea>
+            </textarea>
+        </div>
         
-        <button type="submit">Start Deep Crawl</button>
+        <button type="submit" id="btn">Start Deep Crawl</button>
     </form>
     
     <div id="loader">Spidering internal links and extracting schemas (this may take up to 60 seconds)...</div>
@@ -54,7 +73,7 @@
     <script>
         document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const btn = e.target.querySelector('button');
+            const btn = document.getElementById('btn');
             const loader = document.getElementById('loader');
             const resultBox = document.getElementById('result');
             
@@ -62,13 +81,27 @@
             loader.style.display = 'block';
             resultBox.textContent = '{}';
             
-            const formData = new FormData(e.target);
+            const url = document.getElementById('url').value;
+            const schema = document.getElementById('schema').value;
+            const limit = document.getElementById('limit').value;
+
+            let schemaObj;
             try {
-                const response = await fetch('/scrape', {
+                schemaObj = JSON.parse(schema);
+            } catch (err) {
+                resultBox.textContent = "Error: Invalid JSON Schema - " + err.message;
+                btn.disabled = false;
+                loader.style.display = 'none';
+                return;
+            }
+
+            try {
+                const res = await fetch('/scrape', {
                     method: 'POST',
-                    body: formData
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: url, schema: schemaObj, limit: parseInt(limit) })
                 });
-                const data = await response.json();
+                const data = await res.json();
                 resultBox.textContent = JSON.stringify(data, null, 2);
             } catch (err) {
                 resultBox.textContent = "Error: " + err;

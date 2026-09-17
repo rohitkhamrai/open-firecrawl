@@ -23,23 +23,30 @@ async def get_ui():
     except FileNotFoundError:
         return "<h1>index.html not found</h1>"
 
+from api.schemas import ScrapeRequest
+
 @app.post("/scrape")
-async def scrape_endpoint(url: str = Form(...), schema: str = Form(...)):
+async def scrape_endpoint(request: ScrapeRequest):
     try:
-        schema_dict = json.loads(schema)
-    except json.JSONDecodeError:
-        return JSONResponse(status_code=400, content={"error": "Invalid JSON schema"})
+        req_dict = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+        schema_dict = req_dict.get("schema") or req_dict.get("schema_def")
+        url = str(request.url)
+        limit = request.limit
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=400, content={"status": "error", "message": f"Invalid request: {str(e)}"})
         
     try:
         # ponytail: Deep spider the root URL and save to Neon DB
-        result = await crawl_domain(url, schema_dict)
+        result = await crawl_domain(url, schema_dict, limit=limit)
         await db.save_scrape(url, result)
         
         return JSONResponse(content={"status": "success", "data": result})
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 if __name__ == "__main__":
     import uvicorn

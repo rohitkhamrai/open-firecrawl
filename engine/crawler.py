@@ -4,18 +4,19 @@ from urllib.parse import urljoin, urlparse
 from engine.fetcher import fetch_page
 from engine.markdown import clean_html_to_markdown
 from engine.extractor import extract_schema, merge_json_outputs
+from engine.router import rank_urls
 
-def get_internal_links(html: str, base_url: str, max_links: int = 5) -> list[str]:
-    """Finds up to max_links internal URLs from the raw HTML."""
+def get_internal_links(html: str, base_url: str) -> list[str]:
+    """Finds all internal URLs from the raw HTML."""
     soup = BeautifulSoup(html, 'html.parser')
     base_domain = urlparse(base_url).netloc
     links = set()
     
-    ignore_keywords = ['about', 'contact', 'login', 'register', 'signin', 'signup', 'terms', 'privacy', 'faq', 'policy', 'cart', 'checkout', 'profile', 'lang=']
+    ignore_keywords = ['lang=', 'javascript:', 'mailto:', '#']
     
     for a_tag in soup.find_all('a', href=True):
         href = a_tag['href']
-        if href.startswith('#') or href.startswith('javascript:') or href.startswith('mailto:'):
+        if any(href.startswith(kw) for kw in ignore_keywords):
             continue
             
         full_url = urljoin(base_url, href)
@@ -33,22 +34,9 @@ def get_internal_links(html: str, base_url: str, max_links: int = 5) -> list[str
         if full_url.rstrip('/') == base_url.rstrip('/'):
             continue
             
-        path_and_query = (parsed_url.path + parsed_url.query).lower()
-        if any(kw in path_and_query for kw in ignore_keywords):
-            continue
-            
         links.add(full_url)
         
-    # Ponytail heuristic: prioritize URLs containing 'puja', 'epuja', 'product', 'book'
-    # Fallback to sorting by path length (deep links usually have more path segments).
-    def rank_url(u: str) -> int:
-        score = len(urlparse(u).path)
-        if 'puja' in u.lower() or 'epuja' in u.lower() or 'temple' in u.lower():
-            score += 1000
-        return score
-        
-    sorted_links = sorted(list(links), key=rank_url, reverse=True)
-    return sorted_links[:max_links]
+    return list(links)
 
 async def process_page(url: str, schema: dict, sem: asyncio.Semaphore) -> dict:
     """Processes a single page through the extraction pipeline."""
@@ -58,30 +46,33 @@ async def process_page(url: str, schema: dict, sem: asyncio.Semaphore) -> dict:
         markdown = clean_html_to_markdown(html)
         return await extract_schema(markdown, schema)
 
-async def crawl_domain(start_url: str, schema: dict) -> dict:
-    """Crawls the root URL and up to 5 nested links, merging their schemas."""
-    # ponytail: one pass spidering. Fetch root, extract links, fetch nested pages.
+async def crawl_domain(start_url: str, schema: dict, limit: int = 5) -> dict:
+    """Crawls the root URL and deep pages via Stage 1 LLM Router."""
     print(f"Scraping root url: {start_url}", flush=True)
     html, metadata = await fetch_page(start_url)
     markdown = clean_html_to_markdown(html)
     
     # Extract root
     root_result = await extract_schema(markdown, schema)
-    results = [root_result] if root_result else []
+    final_output = root_result if root_result else {}
     
-    # Spider nested links
-    nested_links = get_internal_links(html, start_url, max_links=5)
+    # Stage 1: Get all internal links and rank them via LLM
+    all_links = get_internal_links(html, start_url)
+    print(f"Found {len(all_links)} raw internal links. Routing through LLM Stage 1...", flush=True)
+    
+    nested_links = await rank_urls(all_links, limit)
+    
+    # Stage 2: Parallel Deep Scraping on Curated Links
     if nested_links:
-        print(f"Found {len(nested_links)} nested links to crawl...", flush=True)
-        sem = asyncio.Semaphore(3) # Max 3 concurrent headless browsers to avoid OOM
+        print(f"Stage 1 returned {len(nested_links)} high-value links. Beginning Stage 2 sequential scrape...", flush=True)
+        sem = asyncio.Semaphore(1) # Max 1 concurrent headless browser to avoid OpenRouter free-tier rate limits
         tasks = [process_page(link, schema, sem) for link in nested_links]
         nested_results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+        valid_nested = [r for r in nested_results if r and not isinstance(r, Exception)]
+        if valid_nested:
+            final_output["extracted_pages"] = valid_nested
         for res in nested_results:
-            if isinstance(res, dict):
-                results.append(res)
-            elif isinstance(res, Exception):
+            if isinstance(res, Exception):
                 print(f"Spider task failed: {res}", flush=True)
                 
-    final_output = merge_json_outputs(results)
     return final_output

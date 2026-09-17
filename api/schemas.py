@@ -6,7 +6,8 @@ class JsonOptions(BaseModel):
 
 class ScrapeRequest(BaseModel):
     url: HttpUrl
-    jsonOptions: Optional[JsonOptions] = None
+    schema_def: Dict[str, Any] = Field(..., alias="schema", description="JSON schema defining the structure to extract")
+    limit: int = Field(default=10, le=500, description="Maximum URLs to crawl, hard limit 500")
 
 class ScrapeResponse(BaseModel):
     markdown: str

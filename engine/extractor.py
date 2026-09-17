@@ -2,6 +2,7 @@ import json
 import asyncio
 from typing import Dict, Any, List, Optional
 import httpx
+import urllib.parse
 from groq import AsyncGroq
 from openai import AsyncOpenAI
 from config import settings
@@ -27,46 +28,46 @@ def merge_json_outputs(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {}
         
     merged = {}
-    # Initialize keys from the first result
-    for key in results[0].keys():
-        val_type = type(results[0][key])
-        if val_type is list:
-            merged[key] = []
-        elif val_type is dict:
-            merged[key] = {}
-        else:
-            merged[key] = ""
+    # Initialize keys from ALL results
+    for res in results:
+        for key, value in res.items():
+            if key not in merged:
+                val_type = type(value)
+                if val_type is list:
+                    merged[key] = []
+                elif val_type is dict:
+                    merged[key] = {}
+                else:
+                    merged[key] = ""
 
     for res in results:
         for k, v in res.items():
-            if k not in merged:
-                continue
-                
             if isinstance(v, list):
                 # Deduplicate based on exact match of dicts or items
                 for item in v:
                     if item not in merged[k]:
                         merged[k].append(item)
             elif isinstance(v, dict):
-                # We could recurse, but top level properties are usually enough
                 merged[k].update(v)
             else:
-                # Keep the first non-empty value
-                if not merged[k] and v:
+                # Keep the longest non-empty value
+                if not merged[k]:
+                    merged[k] = v
+                elif isinstance(v, str) and isinstance(merged[k], str) and len(v) > len(merged[k]):
                     merged[k] = v
                     
     return merged
 
 class ResourcePool:
-    def __init__(self, groq_key: str, or_key: str):
-        self.groq_key = groq_key
+    def __init__(self, groq_keys: list[str], or_key: str):
+        self.groq_keys = groq_keys
         self.or_key = or_key
         self.models = []
         self._lock = asyncio.Lock()
         
     async def initialize(self):
-        if self.groq_key:
-            self.models.append(("groq", settings.DEFAULT_MODEL))
+        for key in self.groq_keys:
+            self.models.append(("groq", settings.DEFAULT_MODEL, key))
             
         if self.or_key:
             try:
@@ -78,22 +79,22 @@ class ResourcePool:
                             m_id = m["id"]
                             prompt_price = m.get("pricing", {}).get("prompt", "0")
                             if prompt_price == "0" or m_id.endswith(":free"):
-                                self.models.append(("openrouter", m_id))
+                                self.models.append(("openrouter", m_id, self.or_key))
             except Exception as e:
                 print(f"Failed to fetch OpenRouter free models: {e}")
                 
         if not self.models:
             raise ValueError("No free models available across Groq or OpenRouter")
             
-    async def acquire_model(self) -> tuple[str, str]:
+    async def acquire_model(self) -> tuple[str, str, str]:
         async with self._lock:
             if not self.models:
                 raise RuntimeError("ResourcePool depleted: all free models failed.")
             return self.models.pop(0)
             
-    async def release_model(self, provider: str, model_id: str):
+    async def release_model(self, provider: str, model_id: str, api_key: str):
         async with self._lock:
-            self.models.append((provider, model_id))
+            self.models.append((provider, model_id, api_key))
 
 async def _extract_chunk(client: Any, chunk: str, schema: Dict[str, Any], provider: str, model_id: str) -> Optional[Dict[str, Any]]:
     prompt = f"""
@@ -131,17 +132,19 @@ Markdown Text:
         
     return json.loads(content.strip())
 
-async def _extract_with_retry(pool: ResourcePool, chunk: str, schema: Dict[str, Any], or_client: Any, groq_client: Any) -> Optional[Dict[str, Any]]:
+async def _extract_with_retry(pool: ResourcePool, chunk: str, schema: Dict[str, Any], or_client: Any, groq_clients: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     max_retries = 3
     for _ in range(max_retries):
-        provider, model_id = await pool.acquire_model()
+        provider, model_id, api_key = await pool.acquire_model()
         try:
-            client = or_client if provider == "openrouter" else groq_client
+            client = or_client if provider == "openrouter" else groq_clients[api_key]
             print(f"Extracting chunk on {provider}/{model_id}...", flush=True)
-            res = await _extract_chunk(client, chunk, schema, provider, model_id)
+            res = await asyncio.wait_for(_extract_chunk(client, chunk, schema, provider, model_id), timeout=15.0)
             if res is not None:
-                await pool.release_model(provider, model_id) # Release on success
+                await pool.release_model(provider, model_id, api_key) # Release on success
                 return res
+        except asyncio.TimeoutError:
+            print(f"Chunk extraction failed on {provider}/{model_id}: Hard timeout exceeded (15s)", flush=True)
         except Exception as e:
             print(f"Chunk extraction failed on {provider}/{model_id}: {str(e)}", flush=True)
             # Do NOT release the model on failure so it is permanently removed from rotation
@@ -150,16 +153,16 @@ async def _extract_with_retry(pool: ResourcePool, chunk: str, schema: Dict[str, 
 
 async def extract_schema(markdown: str, schema: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     or_client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=settings.OPENROUTER_API_KEY, timeout=30.0) if settings.OPENROUTER_API_KEY else None
-    groq_client = AsyncGroq(api_key=settings.GROQ_API_KEY, timeout=30.0) if settings.GROQ_API_KEY else None
+    groq_clients = {key: AsyncGroq(api_key=key, timeout=30.0) for key in settings.groq_keys}
     
-    pool = ResourcePool(settings.GROQ_API_KEY, settings.OPENROUTER_API_KEY)
+    pool = ResourcePool(settings.groq_keys, settings.OPENROUTER_API_KEY)
     await pool.initialize()
         
     chunks = chunk_markdown(markdown)
     tasks = []
     
     for chunk in chunks:
-        tasks.append(_extract_with_retry(pool, chunk, schema, or_client, groq_client))
+        tasks.append(_extract_with_retry(pool, chunk, schema, or_client, groq_clients))
         
     results = await asyncio.gather(*tasks)
     
