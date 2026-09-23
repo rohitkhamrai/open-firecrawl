@@ -14,6 +14,9 @@ class ScrapeResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     json_data: Optional[Dict[str, Any]] = None
 
+class KeywordRequest(BaseModel):
+    keyword: str = Field(..., description="Pooja keyword to research")
+
 class CrawlRequest(BaseModel):
     url: HttpUrl
     maxDepth: int = Field(default=1, le=5, description="Maximum crawl depth, hard limit 5")

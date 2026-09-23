@@ -10,3 +10,6 @@ ui_screenshot.jpg
 .venv/
 venv/
 env/
+
+# CodeLens Graph local index
+.codelens/

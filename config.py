@@ -4,6 +4,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GROQ_API_KEY_2: str = ""
+    GROQ_API_KEY_3: str = ""
+    GROQ_API_KEY_4: str = ""
+    GROQ_API_KEY_5: str = ""
+    GROQ_API_KEY_6: str = ""
     DEFAULT_MODEL: str = "openai/gpt-oss-120b"
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_MODEL: str = "google/gemma-4-31b-it:free"
@@ -15,6 +19,10 @@ class Settings(BaseSettings):
         keys = []
         if self.GROQ_API_KEY: keys.append(self.GROQ_API_KEY)
         if self.GROQ_API_KEY_2: keys.append(self.GROQ_API_KEY_2)
+        if self.GROQ_API_KEY_3: keys.append(self.GROQ_API_KEY_3)
+        if self.GROQ_API_KEY_4: keys.append(self.GROQ_API_KEY_4)
+        if self.GROQ_API_KEY_5: keys.append(self.GROQ_API_KEY_5)
+        if self.GROQ_API_KEY_6: keys.append(self.GROQ_API_KEY_6)
         return keys
 
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8')

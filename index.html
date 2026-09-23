@@ -17,7 +17,22 @@
 </head>
 <body>
     <h1>🔥 open-firecrawl</h1>
-    <p>Deep-crawl a domain and extract structured JSON.</p>
+    <p>OSINT Keyword Agent & Deep-crawl Domain Extractor.</p>
+    
+    <hr style="border: 1px solid #334155; margin: 2rem 0;">
+    
+    <h2>🕵️ OSINT Keyword Agent</h2>
+    <form id="keywordForm">
+        <div class="input-group">
+            <label for="keyword">Pooja Keyword</label>
+            <input type="text" id="keyword" name="keyword" placeholder="e.g. Maha Shivaratri Pooja" required>
+        </div>
+        <button type="submit" id="keywordBtn">Run Keyword Agent</button>
+    </form>
+
+    <hr style="border: 1px solid #334155; margin: 2rem 0;">
+
+    <h2>🕸️ URL Deep Crawler</h2>
     
     <form id="scrapeForm">
         <div class="input-group">
@@ -71,14 +86,16 @@
     <pre id="result">{}</pre>
 
     <script>
+        const loader = document.getElementById('loader');
+        const resultBox = document.getElementById('result');
+
         document.getElementById('scrapeForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const btn = document.getElementById('btn');
-            const loader = document.getElementById('loader');
-            const resultBox = document.getElementById('result');
             
             btn.disabled = true;
             loader.style.display = 'block';
+            loader.textContent = 'Spidering internal links and extracting schemas (this may take up to 60 seconds)...';
             resultBox.textContent = '{}';
             
             const url = document.getElementById('url').value;
@@ -107,6 +124,32 @@
                 resultBox.textContent = "Error: " + err;
             } finally {
                 btn.disabled = false;
+                loader.style.display = 'none';
+            }
+        });
+
+        document.getElementById('keywordForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const keyword = document.getElementById('keyword').value;
+            const keywordBtn = document.getElementById('keywordBtn');
+            
+            keywordBtn.disabled = true;
+            loader.style.display = 'block';
+            loader.textContent = 'Agent running (this may take up to 60s)...';
+            resultBox.textContent = '';
+            
+            try {
+                const res = await fetch('/keyword', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ keyword: keyword })
+                });
+                const data = await res.json();
+                resultBox.textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                resultBox.textContent = "Error: " + err;
+            } finally {
+                keywordBtn.disabled = false;
                 loader.style.display = 'none';
             }
         });

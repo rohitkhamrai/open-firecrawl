@@ -27,34 +27,61 @@ def merge_json_outputs(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not results:
         return {}
         
-    merged = {}
-    # Initialize keys from ALL results
-    for res in results:
-        for key, value in res.items():
-            if key not in merged:
-                val_type = type(value)
-                if val_type is list:
-                    merged[key] = []
-                elif val_type is dict:
-                    merged[key] = {}
+    def is_empty_value(val: Any) -> bool:
+        if not val:
+            return True
+        if isinstance(val, str):
+            lower_val = val.lower()
+            empty_phrases = ["unknown", "not mentioned", "not provided", "n/a", "no data", "none"]
+            if any(phrase in lower_val for phrase in empty_phrases) or len(val.strip()) < 2:
+                return True
+        return False
+        
+    def recursive_merge(base: Any, new_val: Any) -> Any:
+        if isinstance(base, dict) and isinstance(new_val, dict):
+            for k, v in new_val.items():
+                if k not in base:
+                    base[k] = v
                 else:
-                    merged[key] = ""
+                    base[k] = recursive_merge(base[k], v)
+            return base
+        elif isinstance(base, list) and isinstance(new_val, list):
+            for item in new_val:
+                if is_empty_value(item):
+                    continue
+                # If item is a dict, see if we can merge it with an existing dict in base
+                if isinstance(item, dict):
+                    # Identify a primary key (name, source, post_url, title, etc.)
+                    primary_keys = ['name', 'source', 'post_url', 'title', 'url']
+                    key_field = next((k for k in primary_keys if k in item), None)
+                    
+                    merged = False
+                    if key_field and item[key_field]:
+                        # Look for existing item with same key
+                        for existing in base:
+                            if isinstance(existing, dict) and existing.get(key_field) == item[key_field]:
+                                recursive_merge(existing, item)
+                                merged = True
+                                break
+                                
+                    if not merged and item not in base:
+                        base.append(item)
+                elif item not in base:
+                    base.append(item)
+            return base
+        else:
+            # For primitives (strings, ints), prefer the one that is NOT empty/unknown
+            if is_empty_value(base) and not is_empty_value(new_val):
+                return new_val
+            elif not is_empty_value(base) and not is_empty_value(new_val):
+                # If both have data, prefer the longer one (more detail)
+                if isinstance(base, str) and isinstance(new_val, str) and len(new_val) > len(base):
+                    return new_val
+            return base
 
+    merged = {}
     for res in results:
-        for k, v in res.items():
-            if isinstance(v, list):
-                # Deduplicate based on exact match of dicts or items
-                for item in v:
-                    if item not in merged[k]:
-                        merged[k].append(item)
-            elif isinstance(v, dict):
-                merged[k].update(v)
-            else:
-                # Keep the longest non-empty value
-                if not merged[k]:
-                    merged[k] = v
-                elif isinstance(v, str) and isinstance(merged[k], str) and len(v) > len(merged[k]):
-                    merged[k] = v
+        merged = recursive_merge(merged, res)
                     
     return merged
 
@@ -62,12 +89,12 @@ class ResourcePool:
     def __init__(self, groq_keys: list[str], or_key: str):
         self.groq_keys = groq_keys
         self.or_key = or_key
-        self.models = []
+        self.models = asyncio.Queue()
         self._lock = asyncio.Lock()
         
     async def initialize(self):
         for key in self.groq_keys:
-            self.models.append(("groq", settings.DEFAULT_MODEL, key))
+            await self.models.put(("groq", settings.DEFAULT_MODEL, key.strip()))
             
         if self.or_key:
             try:
@@ -79,27 +106,25 @@ class ResourcePool:
                             m_id = m["id"]
                             prompt_price = m.get("pricing", {}).get("prompt", "0")
                             if prompt_price == "0" or m_id.endswith(":free"):
-                                self.models.append(("openrouter", m_id, self.or_key))
+                                await self.models.put(("openrouter", m_id, self.or_key))
             except Exception as e:
                 print(f"Failed to fetch OpenRouter free models: {e}")
                 
-        if not self.models:
+        if self.models.empty():
             raise ValueError("No free models available across Groq or OpenRouter")
             
     async def acquire_model(self) -> tuple[str, str, str]:
-        async with self._lock:
-            if not self.models:
-                raise RuntimeError("ResourcePool depleted: all free models failed.")
-            return self.models.pop(0)
+        return await self.models.get()
             
     async def release_model(self, provider: str, model_id: str, api_key: str):
-        async with self._lock:
-            self.models.append((provider, model_id, api_key))
+        await self.models.put((provider, model_id, api_key))
 
 async def _extract_chunk(client: Any, chunk: str, schema: Dict[str, Any], provider: str, model_id: str) -> Optional[Dict[str, Any]]:
     prompt = f"""
 You are an expert data extractor. Extract information from the provided Markdown text into a strict JSON object that matches the exact JSON schema provided.
 Do NOT include any markdown formatting blocks like ```json in your response. Output raw JSON only.
+CRITICAL: If the markdown contains a [SYSTEM META: Post Engagement Metrics] block at the top, you MUST use it to populate the social_media_traction fields.
+CRITICAL: If a social media URL is present (e.g., in a `## Source:` header), you MUST add it to the `top_posts` array. Extract likes and views directly from the Search Snippet text in the [SYSTEM META] block (e.g., look for '1.5M views' or '10 likes'). NEVER output 'Unknown' if the metric is visible anywhere in the text!
 
 JSON Schema:
 {json.dumps(schema, indent=2)}
@@ -139,21 +164,24 @@ async def _extract_with_retry(pool: ResourcePool, chunk: str, schema: Dict[str, 
         try:
             client = or_client if provider == "openrouter" else groq_clients[api_key]
             print(f"Extracting chunk on {provider}/{model_id}...", flush=True)
-            res = await asyncio.wait_for(_extract_chunk(client, chunk, schema, provider, model_id), timeout=15.0)
+            res = await asyncio.wait_for(_extract_chunk(client, chunk, schema, provider, model_id), timeout=60.0)
             if res is not None:
                 await pool.release_model(provider, model_id, api_key) # Release on success
                 return res
         except asyncio.TimeoutError:
-            print(f"Chunk extraction failed on {provider}/{model_id}: Hard timeout exceeded (15s)", flush=True)
+            print(f"Chunk extraction failed on {provider}/{model_id}: Hard timeout exceeded (60s)", flush=True)
+            # Re-enqueue the model — timeout is transient, not a permanent failure
+            await pool.release_model(provider, model_id, api_key)
         except Exception as e:
             print(f"Chunk extraction failed on {provider}/{model_id}: {str(e)}", flush=True)
-            # Do NOT release the model on failure so it is permanently removed from rotation
+            # Always re-enqueue to prevent Queue deadlocks
+            await pool.release_model(provider, model_id, api_key)
             
     return None
 
 async def extract_schema(markdown: str, schema: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    or_client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=settings.OPENROUTER_API_KEY, timeout=30.0) if settings.OPENROUTER_API_KEY else None
-    groq_clients = {key: AsyncGroq(api_key=key, timeout=30.0) for key in settings.groq_keys}
+    or_client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=settings.OPENROUTER_API_KEY, timeout=65.0) if settings.OPENROUTER_API_KEY else None
+    groq_clients = {key.strip(): AsyncGroq(api_key=key.strip(), timeout=65.0) for key in settings.groq_keys}
     
     pool = ResourcePool(settings.groq_keys, settings.OPENROUTER_API_KEY)
     await pool.initialize()

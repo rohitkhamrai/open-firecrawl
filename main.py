@@ -23,7 +23,7 @@ async def get_ui():
     except FileNotFoundError:
         return "<h1>index.html not found</h1>"
 
-from api.schemas import ScrapeRequest
+from api.schemas import ScrapeRequest, KeywordRequest
 
 @app.post("/scrape")
 async def scrape_endpoint(request: ScrapeRequest):
@@ -42,6 +42,20 @@ async def scrape_endpoint(request: ScrapeRequest):
         result = await crawl_domain(url, schema_dict, limit=limit)
         await db.save_scrape(url, result)
         
+        return JSONResponse(content={"status": "success", "data": result})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+from engine.keyword import run_keyword_agent
+
+@app.post("/v1/keyword")
+@app.post("/keyword")
+async def keyword_endpoint(request: KeywordRequest):
+    try:
+        result = await run_keyword_agent(request.keyword)
+        await db.save_keyword(request.keyword, result)
         return JSONResponse(content={"status": "success", "data": result})
     except Exception as e:
         import traceback
