@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  scrapper-api:
+    build: .
+    container_name: daiv-bharati-scrapper
+    ports:
+      - "8000:8000"
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+    command: python main.py
+
+  # You can also run the batch processor as a separate container service if needed
+  batch-processor:
+    build: .
+    container_name: daiv-bharati-batch
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+    command: python run_batch.py poojas.txt
