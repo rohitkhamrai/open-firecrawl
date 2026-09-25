@@ -33,9 +33,34 @@ The process starts when `run_batch.py` is executed (designed to run once a week)
 - **Vulnerability Status (Pass)**: The database integration (`engine/db.py`) uses parameterized SQL queries (`$1`, `$2::jsonb`). This makes SQL Injection structurally impossible. API keys are handled securely via environment variables (`.env`).
 - **Production Status (Pass)**: The previous FastAPI architecture was highly unstable for automation due to HTTP timeouts and instant rate-limit cascading. The current `run_batch.py` architecture is 100% production-ready for a weekly cron job. The 90-second sleep and 35-second API Key cooldown completely resolves rate limit failures.
 
-## 4. Free/Cheap Upgrade Options (Future Scaling)
-If you need to scale this from 100 poojas a week to 10,000 poojas a week without paying massive enterprise fees, implement these upgrades:
 
-1. **Self-Hosted SearxNG (Free)**: DuckDuckGo will eventually ban your server IP if volume increases. Deploy a SearxNG Docker container on your Ubuntu server. It routes queries through Google, Bing, and DDG simultaneously, acting as a free proxy rotator.
-2. **OpenAI / Anthropic Batch API (Cheap)**: Free OpenRouter models are unstable and occasionally hallucinate. Switch to OpenAI's **Batch API** (using `gpt-4o-mini`). It provides a 50% discount and zero rate limits because you upload a `.jsonl` file and they process it offline over 24 hours. It would cost mere pennies to process thousands of poojas perfectly.
-3. **Local Ollama Extraction (Free)**: Since you are running an Ubuntu server, if you have a mid-range GPU (or high-end CPU), install **Ollama**. Run `llama3.1:8b` locally. Point `engine/extractor.py` to `localhost:11434`. You get infinite, uncensored, free extractions with zero network latency or rate limits.
+## 5. Database Approach (PostgreSQL)
+The scraper uses a robust, schema-less JSONB approach to store data in PostgreSQL. This gives us the rigid structure of a relational database with the dynamic flexibility of a NoSQL document store.
+
+### The Tables
+We maintain a primary table named `keyword_data` designed specifically for the batch pooja scraper:
+- `keyword (TEXT PRIMARY KEY)`: The name of the pooja (e.g., 'Ashlesha Bali Pooja'). Using this as a primary key guarantees no duplicate entries are ever created, even if the scraper runs twice on the same file.
+- `schema_data (JSONB)`: The entire validated JSON payload extracted by the LLM (containing pooja details, pricing arrays, and social media URLs). We use `JSONB` because it stores the JSON in a decomposed binary format, allowing incredibly fast indexing and querying of nested keys directly via SQL.
+- `created_at (TIMESTAMP)`: Automatically tracks when the scrape occurred.
+
+### How & When Data is Saved
+1. **Validation First**: Data is NOT blindly written to the database. Before inserting, `main.py` asserts that the LLM successfully extracted at least one pricing point, one social post, or basic information. If it's a hallucination or an empty scrape, the database write is blocked.
+2. **Upsert Logic (`ON CONFLICT DO UPDATE`)**: When `db.save_keyword()` is called, it executes an "Upsert" query. If the pooja doesn't exist, a new row is created. If the pooja *already exists* (meaning you are re-running a weekly scrape to get updated prices or likes), it automatically overwrites the old `schema_data` with the fresh scrape.
+3. **Connection Pooling**: We use `asyncpg` to maintain an active connection pool to the Ubuntu Postgres server. This is vastly superior to opening/closing a connection on every single insert, preventing connection-exhaustion crashes during heavy batch workloads.
+
+## 6. LLM Extraction (Groq & Schema)
+The synthesis phase relies on **Groq** and **OpenRouter** API keys. Due to their strict rate limits on free tiers, we use an automated `ResourcePool` to cycle through multiple API keys and apply a 35-second cooldown whenever a `429 Too Many Requests` error is encountered. 
+
+The LLM is prompted to strictly extract data into a specific JSON schema, which guarantees consistency for the frontend. The `schema_data` JSONB field stored in the database contains:
+
+- `pooja_info` (Object):
+  - `what`: A clear explanation of what the pooja is.
+  - `why`: The mythological significance and purpose.
+  - `how`: A step-by-step concrete procedure for performing it.
+- `where` (Array of Strings): Famous temple names and locations across India where this specific pooja is celebrated.
+- `who_is_doing_it` (Array of Strings): Information on demographics, priests, and notable devotees participating.
+- `cost_estimates` (Array of Objects): 
+  - Each object contains a `source` (website URL) and a `price` (strictly enforced to be a total currency cost like "Rs. 2500", aggressively rejecting promotional text like "101 advance fee").
+- `social_media_traction` (Object):
+  - `top_posts`: Array of objects containing `post_url` (strictly limited to `instagram.com` or `facebook.com` video links), `likes`, and `views`.
+  - `hashtags`: Array of popular trending hashtags related to the pooja.

@@ -111,7 +111,7 @@ async def run_keyword_agent(keyword: str) -> dict:
                     "type": "object",
                     "properties": {
                         "source": {"type": "string", "description": "The name or URL of the website where this price was found."},
-                        "price": {"type": "string", "description": f"The price or cost range specifically for '{keyword}'. (e.g. 'Rs 500' or '1000 - 5000 INR')."}
+                        "price": {"type": "string", "description": "CRITICAL: MUST be the actual total cost in currency (e.g. 'Rs. 5000' or '2500 INR'). DO NOT extract promotional text like '101 offer', advance booking fees, or generic strings."}
                     },
                     "required": ["source", "price"]
                 },
@@ -125,7 +125,7 @@ async def run_keyword_agent(keyword: str) -> dict:
                         "items": {
                             "type": "object",
                             "properties": {
-                                "post_url": {"type": "string", "description": "The exact URL of the social media post mentioned in the source."},
+                                "post_url": {"type": "string", "description": "CRITICAL: MUST be a valid URL containing 'instagram.com' or 'facebook.com'. If the link is from Twitter, YouTube, or any other site, completely ignore it."},
                                 "likes": {"type": "string", "description": "Number of likes on the post extracted from the source or snippet. NEVER output 'Unknown' if a number is present in the text."},
                                 "views": {"type": "string", "description": "Number of views on the post extracted from the source or snippet. NEVER output 'Unknown' if a number is present in the text."}
                             }

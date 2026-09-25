@@ -5,15 +5,15 @@ from pydantic import BaseModel
 import engine.db as db
 from engine.crawler import crawl_domain
 
-app = FastAPI(title="open-firecrawl")
+from contextlib import asynccontextmanager
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     await db.init_db()
-
-@app.on_event("shutdown")
-async def shutdown_event():
+    yield
     await db.close_db()
+
+app = FastAPI(title="open-firecrawl", lifespan=lifespan)
 
 @app.get("/", response_class=HTMLResponse)
 async def get_ui():
