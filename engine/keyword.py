@@ -4,35 +4,54 @@ from engine.extractor import extract_schema
 from engine.fetcher import fetch_page
 from engine.markdown import clean_html_to_markdown
 
-def _get_search_urls(keyword: str, max_urls: int = 10) -> list[str]:
-    """Uses DDGS to find top URLs for the keyword, bypassing basic blocks via primp."""
+def _get_search_urls_and_snippets(keyword: str):
+    """Uses DDGS to find top URLs. Separates deep-scrape targets from snippet-only targets."""
     print(f"Keyword Agent [Search]: Querying DDG for '{keyword}'...", flush=True)
-    urls = []
+    deep_urls = []
+    snippets = []
+    
     import time
+    
+    # Query 1: General info -> DEEP SCRAPE (Top 2)
     try:
         with DDGS() as ddgs:
-            # Query 1: General info & temples
-            results1 = list(ddgs.text(f"{keyword} famous temples locations India", max_results=5))
-            time.sleep(3)
-            # Query 2: Cost & booking
-            results2 = list(ddgs.text(f"{keyword} pandit cost price rupees INR", max_results=30))
-            time.sleep(3)
-            # Query 3: Social & trending
-            results3 = list(ddgs.text(f"{keyword} trending instagram facebook hashtag", max_results=3))
-            
-            for res in results1 + results2 + results3:
-                if res.get('href') and res['href'] not in urls:
-                    urls.append(res['href'])
-                    
+            results = list(ddgs.text(f"{keyword} pooja history benefits rituals significance", max_results=3))
+            for res in results[:2]:
+                if res.get('href'):
+                    deep_urls.append(res['href'])
     except Exception as e:
-        print(f"Keyword Agent [Search]: DDG search failed: {e}", flush=True)
+        print(f"Keyword Agent [Search Q1]: DDG search failed: {e}", flush=True)
         
-    final_urls = urls[:max_urls]
-    print(f"Keyword Agent [Search]: Found {len(final_urls)} unique URLs.", flush=True)
-    return final_urls
+    time.sleep(2)
+    
+    # Query 2: Cost & booking -> DEEP SCRAPE (Top 8) to guarantee 7+ pricings
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(f"{keyword} book pandit online price packages", max_results=10))
+            if results:
+                # Deep scrape up to 8 booking sites to guarantee we extract enough pricings
+                for res in results[:8]:
+                    if res.get('href'):
+                        deep_urls.append(res['href'])
+    except Exception as e:
+        print(f"Keyword Agent [Search Q2]: DDG search failed: {e}", flush=True)
+        
+    time.sleep(2)
+    
+    # Query 3: Social & trending (Videos only) -> SNIPPETS (Top 5 links)
+    snippets.append("## SOCIAL MEDIA POSTS (Use these for social_media_traction top_posts)")
+    try:
+        with DDGS() as ddgs:
+            for res in ddgs.text(f"{keyword} site:instagram.com/reel/ OR site:facebook.com/watch", max_results=5):
+                if res.get('href'):
+                    snippets.append(f"Source: {res['href']}\nTitle: {res.get('title')}\nInfo: {res.get('body')}\n")
+    except Exception as e:
+        print(f"Keyword Agent [Search Q3]: DDG search failed: {e}", flush=True)
+        
+    return deep_urls, "\n".join(snippets)
 
 async def _scrape_url(url: str, sem: asyncio.Semaphore) -> str:
-    """Uses the Deep Crawler logic (Playwright StealthyFetcher) to scrape a URL."""
+    """Uses the Deep Crawler logic to scrape a URL."""
     async with sem:
         print(f"Keyword Agent [Scrape]: Fetching {url}", flush=True)
         try:
@@ -46,40 +65,22 @@ async def _scrape_url(url: str, sem: asyncio.Semaphore) -> str:
         return ""
 
 async def run_keyword_agent(keyword: str) -> dict:
-    """
-    New Architecture:
-    1. Search for top URLs (DDGS).
-    2. Deep Scrape the URLs (StealthyFetcher).
-    3. LLM Synthesis -> JSON.
-    """
-    print(f"Keyword Agent: Starting unified search+scrape pipeline on '{keyword}'", flush=True)
+    print(f"Keyword Agent: Starting optimized pipeline on '{keyword}'", flush=True)
     
-    # Step 1: Get URLs (increased from 15 to 30 to guarantee enough pricing links)
-    urls = await asyncio.to_thread(_get_search_urls, keyword, 30)
-    if not urls:
-        print("Keyword Agent: No URLs found via search.", flush=True)
-        # Fallback to wiki if search is completely blocked
-        urls = [f"https://en.wikipedia.org/wiki/{keyword.replace(' ', '_')}"]
+    # Step 1: Get Deep Scrape URLs and Lightweight Snippets
+    deep_urls, snippet_text = await asyncio.to_thread(_get_search_urls_and_snippets, keyword)
+    if not deep_urls:
+        deep_urls = [f"https://en.wikipedia.org/wiki/{keyword.replace(' ', '_')}"]
         
-    # Step 2: Scrape URLs concurrently using the global config limit (default 10)
-    sem = asyncio.Semaphore(10)  # Bumped from 2 to 10 for massive speedup
-    tasks = [_scrape_url(url, sem) for url in urls]
+    # Step 2: Scrape ONLY the top 2 general sites for deep details (what, why, how)
+    sem = asyncio.Semaphore(5)
+    tasks = [_scrape_url(url, sem) for url in deep_urls]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     valid_markdowns = [r for r in results if isinstance(r, str) and r.strip()]
     
-    # Bypassing IG/FB Login Walls: Inject raw DDG search snippets directly into markdown
-    # because DDG already indexed the likes/views in its text preview!
-    social_snippets = ""
-    try:
-        with DDGS() as ddgs:
-            # Query Reels and Posts explicitly for engagement metrics
-            for res in ddgs.text(f"{keyword} site:instagram.com/p/ OR site:instagram.com/reel/ OR site:facebook.com/posts/", max_results=6):
-                social_snippets += f"## Source: {res.get('href')}\n[SYSTEM META: Post Engagement Metrics]\nSearch Snippet: {res.get('title')} - {res.get('body')}\n[END SYSTEM META]\n\n"
-    except Exception:
-        pass
-        
-    combined_markdown = social_snippets + "\n".join(valid_markdowns)
+    # Step 3: Combine Deep Markdown + Lightweight Snippets
+    combined_markdown = "\n".join(valid_markdowns) + "\n\n" + snippet_text
     
     print(f"Keyword Agent: Aggregated {len(combined_markdown)} chars of markdown from {len(valid_markdowns)} sites.", flush=True)
     
@@ -110,11 +111,11 @@ async def run_keyword_agent(keyword: str) -> dict:
                     "type": "object",
                     "properties": {
                         "source": {"type": "string", "description": "The name or URL of the website where this price was found."},
-                        "price": {"type": "string", "description": "The price or cost range mentioned (e.g. 'Rs 500' or '1000 - 5000 INR')."}
+                        "price": {"type": "string", "description": f"The price or cost range specifically for '{keyword}'. (e.g. 'Rs 500' or '1000 - 5000 INR')."}
                     },
                     "required": ["source", "price"]
                 },
-                "description": "A list of cost estimates found across different websites to compare prices."
+                "description": f"A list of cost estimates exclusively for '{keyword}'. CRITICAL: DO NOT extract prices for any other pooja or service."
             },
             "social_media_traction": {
                 "type": "object",

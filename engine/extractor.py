@@ -118,6 +118,12 @@ class ResourcePool:
             
     async def release_model(self, provider: str, model_id: str, api_key: str):
         await self.models.put((provider, model_id, api_key))
+        
+    def release_model_delayed(self, provider: str, model_id: str, api_key: str, cooldown: int = 30):
+        async def _delayed():
+            await asyncio.sleep(cooldown)
+            await self.models.put((provider, model_id, api_key))
+        asyncio.create_task(_delayed())
 
 async def _extract_chunk(client: Any, chunk: str, schema: Dict[str, Any], provider: str, model_id: str) -> Optional[Dict[str, Any]]:
     prompt = f"""
@@ -173,9 +179,13 @@ async def _extract_with_retry(pool: ResourcePool, chunk: str, schema: Dict[str, 
             # Re-enqueue the model — timeout is transient, not a permanent failure
             await pool.release_model(provider, model_id, api_key)
         except Exception as e:
-            print(f"Chunk extraction failed on {provider}/{model_id}: {str(e)}", flush=True)
-            # Always re-enqueue to prevent Queue deadlocks
-            await pool.release_model(provider, model_id, api_key)
+            error_str = str(e)
+            print(f"Chunk extraction failed on {provider}/{model_id}: {error_str}", flush=True)
+            if "429" in error_str or "rate limit" in error_str.lower():
+                # Fix: The 429 Cascade Bug. Put the key on a 30s cooldown so other chunks don't instantly pick it up.
+                pool.release_model_delayed(provider, model_id, api_key, cooldown=35)
+            else:
+                await pool.release_model(provider, model_id, api_key)
             
     return None
 

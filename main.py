@@ -55,6 +55,20 @@ from engine.keyword import run_keyword_agent
 async def keyword_endpoint(request: KeywordRequest):
     try:
         result = await run_keyword_agent(request.keyword)
+        
+        # Validation Step for Automated Scraping Pipeline
+        # We ensure at least some meaningful data was extracted before polluting the DB
+        has_pricing = len(result.get("cost_estimates", [])) > 0
+        has_info = bool(result.get("pooja_info", {}).get("what"))
+        has_social = len(result.get("social_media_traction", {}).get("top_posts", [])) > 0
+        
+        if not has_info and not has_pricing and not has_social:
+            return JSONResponse(
+                status_code=422, 
+                content={"status": "failed", "message": "Extraction yielded insufficient data. Validation failed.", "data": result}
+            )
+            
+        # Only store if validation passes
         await db.save_keyword(request.keyword, result)
         return JSONResponse(content={"status": "success", "data": result})
     except Exception as e:
