@@ -1,11 +1,9 @@
-version: '3.8'
-
 services:
   scrapper-api:
     build: .
     container_name: daiv-bharati-scrapper
     ports:
-      - "8001:8000"
+      - "9393:8000"
     restart: always
     env_file:
       - .env
