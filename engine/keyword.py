@@ -1,5 +1,5 @@
 import asyncio
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 from engine.extractor import extract_schema
 from engine.fetcher import fetch_page
 from engine.markdown import clean_html_to_markdown
