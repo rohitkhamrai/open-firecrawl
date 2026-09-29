@@ -24,13 +24,13 @@ def _get_search_urls_and_snippets(keyword: str):
         
     time.sleep(2)
     
-    # Query 2: Cost & booking -> DEEP SCRAPE (Top 8) to guarantee 7+ pricings
+    # Query 2: Cost & booking -> DEEP SCRAPE (Top 12) to guarantee 7+ pricings
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.text(f"{keyword} book pandit online price packages", max_results=10))
+            results = list(ddgs.text(f"{keyword} book pandit online price packages", max_results=15))
             if results:
-                # Deep scrape up to 8 booking sites to guarantee we extract enough pricings
-                for res in results[:8]:
+                # Deep scrape up to 12 booking sites to guarantee we extract enough pricings
+                for res in results[:12]:
                     if res.get('href'):
                         deep_urls.append(res['href'])
     except Exception as e:
@@ -38,11 +38,11 @@ def _get_search_urls_and_snippets(keyword: str):
         
     time.sleep(2)
     
-    # Query 3: Social & trending (Videos only) -> SNIPPETS (Top 5 links)
+    # Query 3: Social & trending (Videos only) -> SNIPPETS (Top 10 links)
     snippets.append("## SOCIAL MEDIA POSTS (Use these for social_media_traction top_posts)")
     try:
         with DDGS() as ddgs:
-            for res in ddgs.text(f"{keyword} site:instagram.com/reel/ OR site:facebook.com/watch", max_results=5):
+            for res in ddgs.text(f"{keyword} site:instagram.com/reel/ OR site:facebook.com/watch", max_results=10):
                 if res.get('href'):
                     snippets.append(f"Source: {res['href']}\nTitle: {res.get('title')}\nInfo: {res.get('body')}\n")
     except Exception as e:
