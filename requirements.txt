@@ -15,5 +15,5 @@ pydantic-settings
 fastapi
 uvicorn
 asyncpg
-beautifulsoup4
 duckduckgo-search
+ddgs
